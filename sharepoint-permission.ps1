@@ -4,24 +4,23 @@ param(
     [Parameter(Mandatory = $true, HelpMessage = "Enter the Application ID (e.g., 70d96320-e711-4e0e-94cf-53e43b557b0a) from the Azure AD App registration.")]
     [string]$AppId,
     [Parameter(Mandatory = $true, HelpMessage = "Enter list of folder paths to give permission separated by comma")]
-    [string]$folderPaths
+    [string]$folderPaths,
+    [Parameter(Mandatory = $false, HelpMessage = "Enter the Drive name (e.g., Documents). Defaults to 'Documents' if not supplied.")]
+    [string]$DriveName = "Documents"
 )
 
 Import-Module Microsoft.Graph.Sites
 
 Connect-MgGraph -Scopes "Sites.ReadWrite.All", "Files.ReadWrite.All"
 
-function Get-DriveItems {
+function Get-DriveByName {
     param (
-        [string]$DriveId,
-        [string]$ParentId = ""
+        [string]$SiteId,
+        [string]$DriveName
     )
-
-    if ($ParentId) {
-        Get-MgDriveItemChild -DriveId $DriveId -DriveItemId $ParentId
-    } else {
-        Get-MgDriveRootChild -DriveId $DriveId
-    }
+    $drives = Get-MgSiteDrive -SiteId $SiteId
+    $drive = $drives | Where-Object { $_.Name -eq $DriveName }
+    return $drive
 }
 
 # Get the Site ID from the provided URL
@@ -34,13 +33,13 @@ $siteId = $site.Id
 Write-Host "Sharepoint Site Found" -ForegroundColor Cyan -nonewline
 $site | Format-Table -AutoSize | Out-Host
 
-# Get the Drive from the Site ID
-$drive = Get-MgSiteDrive -SiteId $siteId
+# Get the Drive by name from the Site ID
+$drive = Get-DriveByName -SiteId $siteId -DriveName $DriveName
 if (-not $drive) {
-    Write-Host "Drive not found. Please check the SiteId and try again." -ForegroundColor Red
+    Write-Host "Drive '$DriveName' not found. Please check the Drive name and try again." -ForegroundColor Red
     exit
 }
-Write-Host "Sharepoint Drive found" -ForegroundColor Cyan -nonewline
+Write-Host "Sharepoint Drive '$DriveName' found" -ForegroundColor Cyan -nonewline
 $drive | Format-Table -AutoSize | Out-Host
 
 # Split the folder paths into an array
@@ -53,7 +52,7 @@ foreach ($folderPath in $folderPathArray) {
         Write-Host "Folder retrieved successfully: $folderPath" -ForegroundColor Cyan
         $item | Format-Table -AutoSize | Out-Host
         $permissionParams = @{
-            roles = @("read")
+            roles     = @("read")
             grantedTo = @{
                 application = @{
                     id = $appId
@@ -62,16 +61,17 @@ foreach ($folderPath in $folderPathArray) {
         }
         $permission = New-MgDriveItemPermission -DriveId $drive.Id -DriveItemId $item.Id -BodyParameter $permissionParams
         $itemsResult += [PSCustomObject]@{
-            FolderPath = $folderPath
-            PermissionId = $permission.Id
+            FolderPath      = $folderPath
+            PermissionId    = $permission.Id
             PermissionRoles = $permission.Roles -join ', '
             PermissionAdded = $true
         }
-    } catch {
+    }
+    catch {
         Write-Host "Error retrieving folder: $folderPath. $_" -ForegroundColor Red
         $itemsResult += [PSCustomObject]@{
-            FolderPath = $folderPath
-            PermissionId = $null
+            FolderPath      = $folderPath
+            PermissionId    = $null
             PermissionRoles = $null
             PermissionAdded = $false
         }
