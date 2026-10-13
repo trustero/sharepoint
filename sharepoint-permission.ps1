@@ -51,19 +51,27 @@ foreach ($folderPath in $folderPathArray) {
         $item = Get-MgDriveItem -DriveId $drive.Id -DriveItemId "root:$folderPath"
         Write-Host "Folder retrieved successfully: $folderPath" -ForegroundColor Cyan
         $item | Format-Table -AutoSize | Out-Host
+        # Microsoft documents grantedToV2 as the only accepted grantee shape on
+        # driveItem permissions (grantedTo / grantedToIdentities are deprecated).
         $permissionParams = @{
-            roles     = @("read")
-            grantedTo = @{
+            roles       = @("read")
+            grantedToV2 = @{
                 application = @{
                     id = $appId
                 }
             }
         }
         $permission = New-MgDriveItemPermission -DriveId $drive.Id -DriveItemId $item.Id -BodyParameter $permissionParams
+        $grantedApp = $permission.GrantedToV2.Application.Id
+        if (-not $grantedApp) { $grantedApp = $permission.GrantedTo.Application.Id }
+        if ($grantedApp -ne $appId) {
+            Write-Host "Warning: permission $($permission.Id) was created but Graph reports grantee '$grantedApp', not $appId. Verify with Get-MgDriveItemPermission." -ForegroundColor Yellow
+        }
         $itemsResult += [PSCustomObject]@{
             FolderPath      = $folderPath
             PermissionId    = $permission.Id
             PermissionRoles = $permission.Roles -join ', '
+            GrantedToAppId  = $grantedApp
             PermissionAdded = $true
         }
     }
@@ -73,10 +81,16 @@ foreach ($folderPath in $folderPathArray) {
             FolderPath      = $folderPath
             PermissionId    = $null
             PermissionRoles = $null
+            GrantedToAppId  = $null
             PermissionAdded = $false
         }
     }
 }
 Write-Host "Permissions added for the following folders:" -ForegroundColor Green
 $itemsResult | Format-Table -AutoSize | Out-Host
+$failed = @($itemsResult | Where-Object { -not $_.PermissionAdded })
+if ($failed.Count -gt 0) {
+    Write-Host "Script completed with $($failed.Count) folder(s) NOT granted. Trustero will get 403 on files under those folders." -ForegroundColor Red
+    exit 1
+}
 Write-Host "Script completed." -ForegroundColor Green
