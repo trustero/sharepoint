@@ -1,87 +1,130 @@
-# SharePoint Folder Permission Assignment Script
+# SharePoint Access Setup for Trustero
 
-This PowerShell script assigns permissions to specific folders in a SharePoint site for a registered Azure AD Application.
+One PowerShell script that gives a Trustero app registration read access to
+specific SharePoint folders. It replaces two manual steps in the Azure portal
+and one in SharePoint:
+
+| Step | Portal / manual way | With the script |
+| --- | --- | --- |
+| Add the `Sites.Selected` and `Files.SelectedOperations.Selected` application permissions | Azure portal → App registrations → API permissions | `-SetupAppPermissions` |
+| Grant admin consent | Azure portal → "Grant admin consent for <tenant>" | `-SetupAppPermissions` |
+| Grant the app read access to each folder | No portal UI; Graph API call per folder | `-SiteUrl` + `-folderPaths` |
+
+The app registration itself (name, client secret, tenant ID) is still created
+in the Azure portal. See the
+[App Registration Setup Guide](https://support.trustero.com/knowledge/microsoft-app-registration-setup-guide)
+and the
+[SharePoint Document Management System Setup Guide](https://support.trustero.com/knowledge/sharepoint-document-management-system-setup-guide).
 
 ## Prerequisites
 
-- PowerShell 7+
-- [Microsoft.Graph PowerShell module](https://learn.microsoft.com/en-us/powershell/microsoftgraph/installation)
-- Permissions to connect to Microsoft Graph with `Sites.ReadWrite.All` and `Files.ReadWrite.All` scopes
-- Application (client) ID from Azure AD App Registration
+- PowerShell 7 or later (Windows, macOS or Linux).
+- The Microsoft Graph PowerShell modules `Microsoft.Graph.Authentication`,
+  `Microsoft.Graph.Sites`, `Microsoft.Graph.Files` and, for
+  `-SetupAppPermissions`, `Microsoft.Graph.Applications`. The script installs
+  any that are missing into the current user's profile; no admin rights on the
+  machine are needed. To preinstall them yourself:
 
-## Installation
+  ```powershell
+  Install-Module Microsoft.Graph.Authentication, Microsoft.Graph.Sites, Microsoft.Graph.Files, Microsoft.Graph.Applications -Scope CurrentUser
+  ```
 
-1. Install the Microsoft Graph module if not already installed:
-   ```powershell
-   Install-Module Microsoft.Graph -Scope CurrentUser
-   ```
+- The Application (client) ID of the Trustero app registration.
 
-2. Save the script as `sharepoint-permission.ps1`.
+## Who runs which part
+
+The script has two independent phases, each with its own Microsoft sign-in
+that asks only for the scopes that phase needs.
+
+| Phase | Switch | Who | Graph scopes requested at sign-in |
+| --- | --- | --- | --- |
+| A. App permissions + admin consent | `-SetupAppPermissions` | Global Administrator or Privileged Role Administrator | `Application.ReadWrite.All`, `AppRoleAssignment.ReadWrite.All` |
+| B. Folder grants | `-SiteUrl` + `-folderPaths` | Anyone with access to the SharePoint site | `Sites.ReadWrite.All`, `Files.ReadWrite.All` |
+
+Phase A runs once per app registration. Phase B runs whenever folders are
+added. One person with both roles can run both in a single command.
+
+> Cloud Application Administrator is **not** enough for Phase A. Microsoft
+> does not let that role consent to Microsoft Graph application permissions.
 
 ## Usage
 
-
-Run the script in PowerShell with the required parameters:
-
-```powershell
-.\sharepoint-permission.ps1 -SiteUrl "https://yourtenant.sharepoint.com/sites/yoursite" -AppId "YOUR-APP-ID" -folderPaths "/Shared Documents/Folder1,/Shared Documents/Folder2"
-```
-
-You can also specify a custom drive name (optional, defaults to "Documents"):
+Phase A, Global Administrator, once:
 
 ```powershell
-.\sharepoint-permission.ps1 -SiteUrl "https://yourtenant.sharepoint.com/sites/yoursite" -AppId "YOUR-APP-ID" -folderPaths "/Finance/Invoices,/Finance/Reports" -DriveName "FinanceDocs"
+./sharepoint-permission.ps1 -AppId <client-id> -SetupAppPermissions
 ```
 
-### Parameters
+Phase B, site owner, per folder set:
 
-### Script Options
-
-- `-SiteUrl` (required)
-  - The full URL of your SharePoint site (e.g., `https://yourtenant.sharepoint.com/sites/yoursite`).
-
-- `-AppId` (required)
-  - The Application (client) ID from your Azure AD App registration.
-
-- `-folderPaths` (required)
-  - Comma-separated list of folder paths (relative to the SharePoint document library root) to assign permissions to.
-  - Example: `"/Folder1,/Folder2"`
-
-- `-DriveName` (optional)
-  - The name of the SharePoint drive (document library). Defaults to `Documents` if not supplied.
-  - Example: `-DriveName "FinanceDocs"`
-
-## What the Script Does
-
-1. Connects to Microsoft Graph with the required scopes.
-2. Finds the SharePoint site and drive (document library).
-3. Iterates through each folder path provided (comma-separated).
-4. Assigns "read" permission to the specified Azure AD Application for each folder.
-5. Handles errors for missing sites, drives, or folders and outputs a summary table of the results.
-
-## Example
-
-
-### Example 1: Basic Usage
 ```powershell
-.\sharepoint-permission.ps1 -SiteUrl "https://contoso.sharepoint.com/sites/finance" -AppId "70d96320-e711-4e0e-94cf-53e43b557b0a" -folderPaths "/Invoices,/Reports"
+./sharepoint-permission.ps1 -AppId <client-id> -SiteUrl https://<tenant>.sharepoint.com/sites/<site> -folderPaths '/Policies,/Evidence'
 ```
 
-### Example 2: Custom Drive Name
+Both phases in one run:
+
 ```powershell
-.\sharepoint-permission.ps1 -SiteUrl "https://contoso.sharepoint.com/sites/hr" -AppId "70d96320-e711-4e0e-94cf-53e43b557b0a" -folderPaths "/Policies,/Benefits" -DriveName "HRDocs"
+./sharepoint-permission.ps1 -AppId <client-id> -SetupAppPermissions -SiteUrl https://<tenant>.sharepoint.com/sites/<site> -folderPaths '/Policies,/Evidence'
 ```
 
-### Example 3: Multiple Folders and Error Handling
+A document library other than the default `Documents`:
+
 ```powershell
-.\sharepoint-permission.ps1 -SiteUrl "https://contoso.sharepoint.com/sites/projects" -AppId "70d96320-e711-4e0e-94cf-53e43b557b0a" -folderPaths "/2025/Alpha,/2025/Beta,/2025/NonExistentFolder"
+./sharepoint-permission.ps1 -AppId <client-id> -SiteUrl https://<tenant>.sharepoint.com/sites/<site> -folderPaths '/Invoices' -DriveName 'FinanceDocs'
 ```
-If a folder does not exist, the script will report the error and continue processing the remaining folders.
+
+Each command opens a browser window for Microsoft sign-in. Run the script
+again with more folders at any time; grants that already exist are skipped.
+
+## Parameters
+
+| Parameter | Required | Description |
+| --- | --- | --- |
+| `-AppId` | Always | Application (client) ID of the Trustero app registration. |
+| `-SetupAppPermissions` | Phase A | Add `Sites.Selected` and `Files.SelectedOperations.Selected` as application permissions and grant admin consent. Existing permissions on the registration (for example the delegated ones used by the file picker) are kept. |
+| `-SiteUrl` | Phase B | Full SharePoint site URL, e.g. `https://contoso.sharepoint.com/sites/finance`. |
+| `-folderPaths` | Phase B | Comma-separated folder paths relative to the document library root, e.g. `'/Policies,/Evidence/2026'`. Wrap in single quotes; folder names with spaces are fine. |
+| `-DriveName` | No | Document library name. Defaults to `Documents`. |
+
+## What the script does
+
+Phase A (`-SetupAppPermissions`):
+
+1. Signs in with `Application.ReadWrite.All` and `AppRoleAssignment.ReadWrite.All`.
+2. Finds the app registration by client ID and the Microsoft Graph service
+   principal in your tenant.
+3. Adds `Sites.Selected` and `Files.SelectedOperations.Selected` to the
+   registration's requested permissions, merging with whatever is already
+   there.
+4. Creates the enterprise application (service principal) if the app has
+   never been consented, then grants admin consent by assigning the two app
+   roles to it.
+5. Signs out.
+
+Phase B (`-SiteUrl` + `-folderPaths`):
+
+1. Signs in with `Sites.ReadWrite.All` and `Files.ReadWrite.All`.
+2. Resolves the site from its URL and the document library from `-DriveName`.
+3. For each folder, grants the app registration the `read` role on that
+   folder.
+4. Prints a summary table and exits non-zero if any folder was not granted.
+
+Both phases are idempotent: rerunning skips anything already in place.
 
 ## Troubleshooting
 
-
-- Ensure you have the necessary permissions in Azure AD and SharePoint.
-- Double-check folder paths for typos and correct casing.
-- If you see "Site not found" or "Drive not found", verify the `-SiteUrl` and `-DriveName` are correct.
-- If a folder is not found, check the path and ensure it exists in the specified drive.
+- **`The term 'Get-MgSite' is not recognized`**: the Graph modules are not
+  installed. The current script installs them automatically; with an older
+  copy run the `Install-Module` line under Prerequisites.
+- **`Site not found for '<url>'`**: check the URL. The script resolves the
+  site by host and path, so `https://<tenant>.sharepoint.com/sites/<site>`
+  must be exact, without a trailing page or library path.
+- **`Drive '<name>' not found`**: the document library name differs from
+  `Documents`. Pass `-DriveName` with the library's display name.
+- **`Error retrieving folder`**: the path is relative to the library root and
+  case-sensitive. `/Shared Documents/...` is wrong when the library is already
+  selected by `-DriveName`; use `/Folder` instead.
+- **`Insufficient privileges` during `-SetupAppPermissions`**: the signed-in
+  user is not a Global Administrator or Privileged Role Administrator.
+- **Trustero gets 403 on a file**: its folder was not granted. Rerun Phase B
+  with that folder, or a parent folder, in `-folderPaths`.
