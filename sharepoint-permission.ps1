@@ -163,14 +163,22 @@ Write-Host "Sharepoint Drive '$DriveName' found" -ForegroundColor Cyan -nonewlin
 $drive | Format-Table -AutoSize | Out-Host
 
 # Split the folder paths into an array
-$folderPathArray = $folderPaths -split ',' | ForEach-Object { $_.Trim() }
+$folderPathArray = $folderPaths -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
 $itemsResult = @()
 
 foreach ($folderPath in $folderPathArray) {
     try {
-        $item = Get-MgDriveItem -DriveId $drive.Id -DriveItemId "root:$folderPath"
+        # Address the folder by path (GET /drives/{drive-id}/root:/{path}) with
+        # each segment percent-encoded, so names with spaces, '#', '%' or '&'
+        # resolve. Get-MgDriveItem -DriveItemId "root:/$folderPath" is not used:
+        # it sends the whole value as an escaped item id under /items/, which
+        # failed for every folder with a space in its path (and pre-encoding
+        # the space gets double-encoded).
+        $encodedPath = (($folderPath.Trim('/') -split '/') | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
+        $itemUri = if ($encodedPath) { "v1.0/drives/$($drive.Id)/root:/$encodedPath" } else { "v1.0/drives/$($drive.Id)/root" }
+        $item = Invoke-MgGraphRequest -Method GET -Uri $itemUri -OutputType PSObject
         Write-Host "Folder retrieved successfully: $folderPath" -ForegroundColor Cyan
-        $item | Format-Table -AutoSize | Out-Host
+        $item | Select-Object Id, Name, WebUrl | Format-Table -AutoSize | Out-Host
         # Microsoft documents grantedToV2 as the only accepted grantee shape on
         # driveItem permissions (grantedTo / grantedToIdentities are deprecated).
         $permissionParams = @{
